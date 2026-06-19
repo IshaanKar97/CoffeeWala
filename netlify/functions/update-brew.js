@@ -1,5 +1,5 @@
-// Netlify function — create one brew in the Coffee Recipe Logbook (write).
-import { NOTION_API, NOTION_VERSION, LOGBOOK_DB_ID, buildProperties, json } from '../notion-helpers.js'
+// Netlify function — update an existing brew's fields in the Logbook (edit).
+import { NOTION_API, NOTION_VERSION, buildProperties, json } from '../notion-helpers.js'
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return json(405, { error: 'Method not allowed' })
@@ -12,12 +12,13 @@ export const handler = async (event) => {
   } catch {
     return json(400, { error: 'Invalid JSON body.' })
   }
+  if (!data.id) return json(400, { error: 'Missing brew id.' })
 
   try {
-    const res = await fetch(`${NOTION_API}/pages`, {
-      method: 'POST',
+    const res = await fetch(`${NOTION_API}/pages/${data.id}`, {
+      method: 'PATCH',
       headers: { Authorization: `Bearer ${token}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parent: { database_id: LOGBOOK_DB_ID }, properties: buildProperties(data) }),
+      body: JSON.stringify({ properties: buildProperties(data) }),
     })
     const body = await res.json()
     if (!res.ok) return json(res.status, { error: body.message || 'Notion API error', code: body.code })

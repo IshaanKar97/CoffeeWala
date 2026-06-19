@@ -220,6 +220,30 @@ export default function App() {
     }
   }
 
+  // Re-brew: load a logged brew's inputs back into the calculator.
+  const reBrew = (brew) => {
+    const modeFromMethod = { 'V60 - No Ice': 'v60-no-ice', 'V60 - With Ice': 'v60-ice', 'Filter Coffee': 'filter' }
+    const m = modeFromMethod[brew.method] || 'v60-no-ice'
+    setMode(m)
+    if (brew.coffee != null) setDose(String(brew.coffee))
+    if (m === 'filter') {
+      if (brew.ratio != null) setWaterRatio(String(brew.ratio))
+      if (brew.milk != null && brew.coffee) setMilkRatio(String(Math.round((brew.milk / brew.coffee) * 100) / 100))
+    } else {
+      if (brew.ratio != null) setRatio(String(brew.ratio))
+      if (m === 'v60-ice' && brew.ice != null && brew.totalWater) setIceFactor(String(Math.round((brew.ice / brew.totalWater) * 100) / 100))
+    }
+    if (brew.bloomWater != null) setBloom(String(brew.bloomWater))
+    if (brew.bloomTime) setBloomTime(brew.bloomTime)
+    if (brew.grindSize) setGrind(brew.grindSize)
+    if (brew.waterTemp) {
+      setTempOn(true)
+      const t = parseFloat(brew.waterTemp)
+      setWaterTempC(Number.isNaN(t) ? '95' : String(t))
+    }
+    setView('calculator')
+  }
+
   const bloomPlaceholder = num(dose) > 0 ? `${defaultBloom(num(dose))} (default)` : '2 × dose'
 
   return (
@@ -250,7 +274,7 @@ export default function App() {
           ))}
         </div>
 
-        {view === 'logbook' && <Logbook />}
+        {view === 'logbook' && <Logbook onRebrew={reBrew} />}
 
         {view === 'calculator' && (
           <>

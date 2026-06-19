@@ -3,6 +3,7 @@
 
 const SAVE_ENDPOINT = '/.netlify/functions/save-brew'
 const LIST_ENDPOINT = '/.netlify/functions/list-brews'
+const UPDATE_ENDPOINT = '/.netlify/functions/update-brew'
 
 /** POST a brew payload to the Logbook. Resolves with { id, url } or throws. */
 export async function saveBrew(payload) {
@@ -53,4 +54,31 @@ export async function listBrews() {
     throw new Error('Sync function not reachable — run `netlify dev` or test on a deploy.')
   }
   return body.brews
+}
+
+/** PATCH an existing brew (payload must include `id`). Resolves with { id, url } or throws. */
+export async function updateBrew(payload) {
+  let res
+  try {
+    res = await fetch(UPDATE_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    throw new Error('Network error — is the sync function running? (needs `netlify dev` or a deploy)')
+  }
+  let body = {}
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON response */
+  }
+  if (!res.ok) {
+    throw new Error(body.error || `Update failed (HTTP ${res.status})`)
+  }
+  if (!body.id) {
+    throw new Error('Sync function not reachable — run `netlify dev` or test on a deploy.')
+  }
+  return body
 }
