@@ -2,6 +2,7 @@
 // serverless function, which holds the Notion token server-side.
 
 const SAVE_ENDPOINT = '/.netlify/functions/save-brew'
+const LIST_ENDPOINT = '/.netlify/functions/list-brews'
 
 /** POST a brew payload to the Logbook. Resolves with { id, url } or throws. */
 export async function saveBrew(payload) {
@@ -29,4 +30,27 @@ export async function saveBrew(payload) {
     throw new Error('Sync function not reachable — run `netlify dev` or test on a deploy.')
   }
   return body
+}
+
+/** GET the list of brews from the Logbook. Resolves with an array or throws. */
+export async function listBrews() {
+  let res
+  try {
+    res = await fetch(LIST_ENDPOINT)
+  } catch {
+    throw new Error('Network error — is the sync function running? (needs `netlify dev` or a deploy)')
+  }
+  let body = {}
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON response */
+  }
+  if (!res.ok) {
+    throw new Error(body.error || `Load failed (HTTP ${res.status})`)
+  }
+  if (!Array.isArray(body.brews)) {
+    throw new Error('Sync function not reachable — run `netlify dev` or test on a deploy.')
+  }
+  return body.brews
 }
