@@ -1,12 +1,30 @@
 import { useEffect, useMemo, useState } from 'react'
 import { calculate, defaultBloom } from './lib/calculations.js'
 import Field from './components/Field.jsx'
+import { useBrewTimer, fmt } from './lib/useBrewTimer.js'
 
 const MODES = [
   { id: 'v60-no-ice', label: 'V60 — No Ice' },
   { id: 'v60-ice', label: 'V60 — With Ice' },
   { id: 'filter', label: 'Filter Coffee' },
 ]
+
+// Lap-able steps per mode (PRD §6.6) + the Recipe Logbook column each fills.
+function lapStepsFor(mode) {
+  if (mode === 'filter') {
+    return [
+      { key: 'bloom', label: 'Bloom', logCol: 'Bloom Time' },
+      { key: 'pour1', label: 'Main pour', logCol: 'Pour 1 Time' },
+      { key: 'drawdown', label: 'Drawdown end', logCol: 'Drawdown Time' },
+    ]
+  }
+  return [
+    { key: 'bloom', label: 'Bloom', logCol: 'Bloom Time' },
+    { key: 'pour1', label: 'Pour 1', logCol: 'Pour 1 Time' },
+    { key: 'pour2', label: 'Pour 2', logCol: 'Pour 2 Time' },
+    { key: 'pour3', label: 'Pour 3', logCol: 'Pour 3 Time' },
+  ]
+}
 
 const num = (s) => (s == null || String(s).trim() === '' ? undefined : parseFloat(s))
 
@@ -49,6 +67,15 @@ export default function App() {
   const [bloom, setBloom] = useState(saved.bloom)
   const [bloomTime, setBloomTime] = useState(saved.bloomTime)
   const [copied, setCopied] = useState(false)
+
+  const lapSteps = useMemo(() => lapStepsFor(mode), [mode])
+  // The final step is not lapped manually — stopping the timer records its time.
+  const terminalKey = lapSteps[lapSteps.length - 1].key
+  const timer = useBrewTimer()
+
+  // Reset the timer + captured laps when the brew method changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => timer.clear(), [mode])
 
   const inputs = useMemo(() => {
     const base = { dose: num(dose), bloom: num(bloom) }
@@ -94,6 +121,16 @@ export default function App() {
     lines.push(`Bloom ${result.bloomWater} g (${bloomTime || '00:30'})`)
     lines.push('Pours (add → scale reads):')
     result.steps.forEach((s) => lines.push(`  ${s.label}: +${s.add} → ${s.cumulative} g`))
+    const timed = lapSteps
+      .map((ls) => {
+        const t = ls.key === 'bloom' ? timer.laps.bloom || bloomTime : timer.laps[ls.key]
+        return t ? `  ${ls.label}: ${t}` : null
+      })
+      .filter(Boolean)
+    if (timed.length) {
+      lines.push('Times (elapsed from start):')
+      lines.push(...timed)
+    }
     try {
       await navigator.clipboard.writeText(lines.join('\n'))
       setCopied(true)
@@ -104,12 +141,6 @@ export default function App() {
   }
 
   const bloomPlaceholder = num(dose) > 0 ? `${defaultBloom(num(dose))} (default)` : '2 × dose'
-  const noteFor = (label) => {
-    if (label === 'Bloom') return `wait ${bloomTime || '00:30'}`
-    if (label === 'Main pour') return 'spiral · swirl · lid on'
-    if (label === 'Pour 3') return 'done'
-    return ''
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-stone-100 to-stone-200 text-stone-900">
@@ -190,6 +221,25 @@ export default function App() {
               )}
             </div>
 
+            {/* Brew Timer controls (PRD §6.6) */}
+            <div className="mb-4 flex items-center gap-3 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
+              <span className="font-mono text-2xl font-bold tabular-nums text-stone-900">{fmt(timer.elapsed)}</span>
+              <div className="ml-auto flex gap-2">
+                {timer.running ? (
+                  <button onClick={() => timer.stop(terminalKey)} className="rounded-lg bg-stone-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-800">
+                    Stop
+                  </button>
+                ) : (
+                  <button onClick={timer.start} className="rounded-lg bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800">
+                    Start
+                  </button>
+                )}
+                <button onClick={timer.reset} className="rounded-lg border border-stone-300 px-3 py-1.5 text-sm font-medium text-stone-700 hover:border-stone-400">
+                  Reset
+                </button>
+              </div>
+            </div>
+
             {!result.valid ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                 <ul className="list-inside list-disc space-y-1">
@@ -213,24 +263,49 @@ export default function App() {
                     <tr className="border-b border-stone-200 text-left text-stone-500">
                       <th className="py-2 font-medium">Step</th>
                       <th className="py-2 text-right font-medium">Add (g)</th>
-                      <th className="py-2 text-right font-medium">Scale reads (g)</th>
-                      <th className="py-2 pl-3 font-medium">Note</th>
+                      <th className="py-2 text-right font-medium">Reads (g)</th>
+                      <th className="py-2 pl-2 text-right font-medium">Time</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {result.steps.map((s, i) => (
-                      <tr key={i} className="border-b border-stone-100 last:border-0">
-                        <td className="py-2 font-medium text-stone-800">{s.label}</td>
-                        <td className="py-2 text-right tabular-nums">+{s.add}</td>
-                        <td className="py-2 text-right font-semibold tabular-nums">{s.cumulative}</td>
-                        <td className="py-2 pl-3 text-stone-500">{noteFor(s.label)}</td>
-                      </tr>
-                    ))}
+                    {lapSteps.map((ls, i) => {
+                      const step = result.steps[i]
+                      const isTerminal = ls.key === terminalKey
+                      const placeholder = isTerminal ? 'on stop' : ls.key === 'bloom' ? bloomTime || '00:30' : 'mm:ss'
+                      return (
+                        <tr key={ls.key} className="border-b border-stone-100 last:border-0">
+                          <td className="py-2 font-medium text-stone-800">{ls.label}</td>
+                          <td className="py-2 text-right tabular-nums">{step ? `+${step.add}` : '—'}</td>
+                          <td className="py-2 text-right font-semibold tabular-nums">{step ? step.cumulative : '—'}</td>
+                          <td className="py-2 pl-2">
+                            <div className="flex items-center justify-end gap-1">
+                              {!isTerminal && (
+                                <button
+                                  onClick={() => timer.lap(ls.key)}
+                                  title={`Lap ${ls.label}`}
+                                  className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+                                >
+                                  Lap
+                                </button>
+                              )}
+                              <input
+                                type="text"
+                                value={timer.laps[ls.key] ?? ''}
+                                placeholder={placeholder}
+                                onChange={(e) => timer.editLap(ls.key, e.target.value)}
+                                className="w-14 rounded border border-stone-300 px-1 py-0.5 text-center font-mono text-xs tabular-nums outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
 
                 {mode === 'filter' && (
                   <div className="mt-4 space-y-2 text-sm text-stone-600">
+                    <p>🌀 Main pour: spiral from center, swirl, lid on.</p>
                     <p>🥛 Heat &amp; serve <span className="font-semibold text-stone-800">{result.milk} g</span> milk alongside the decoction.</p>
                     <p>🌡️ Water 80–85 °C · expected drawdown 7–10 min.</p>
                     <p className="rounded-lg bg-red-50 px-3 py-2 text-red-700">⚠️ Remove the tamper / metal disk before brewing.</p>

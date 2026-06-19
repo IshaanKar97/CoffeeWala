@@ -64,6 +64,7 @@ When two-way Notion sync is built, the integration token will live as a Netlify 
 | `src/lib/calculations.test.js` | Vitest unit tests covering the worked examples + no-drift invariant |
 | `src/App.jsx` | Calculator UI (mode tabs, inputs, live recipe table) |
 | `src/components/Field.jsx` | Reusable labelled number input |
+| `src/components/BrewTimer.jsx` | Count-up brew timer with per-step lap capture (PRD §6.6) |
 | `netlify.toml` | Netlify deploy config (build command, publish dir, SPA redirect, Node version) |
 | `README.md` | This file — project overview |
 | `CLAUDE.md` | Claude Code operating instructions for this repository |
