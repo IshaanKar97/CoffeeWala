@@ -4,6 +4,11 @@
   command = "npm run build"
   publish = "dist"
 
+[functions]
+  # Server-side Notion sync proxy (holds NOTION_TOKEN; never bundled to client).
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
 [build.environment]
   # Pin a stable LTS for reproducible builds (Vite 6 needs Node 18+).
   NODE_VERSION = "20"

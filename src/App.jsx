@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { calculate, defaultBloom } from './lib/calculations.js'
 import Field from './components/Field.jsx'
 import { useBrewTimer, fmt } from './lib/useBrewTimer.js'
+import { saveBrew } from './lib/logbook.js'
 
 const MODES = [
   { id: 'v60-no-ice', label: 'V60 — No Ice' },
@@ -67,6 +68,11 @@ export default function App() {
   const [bloom, setBloom] = useState(saved.bloom)
   const [bloomTime, setBloomTime] = useState(saved.bloomTime)
   const [copied, setCopied] = useState(false)
+  const [rating, setRating] = useState('')
+  const [notes, setNotes] = useState('')
+  const [saveStatus, setSaveStatus] = useState('idle') // idle | saving | saved | warn | error
+  const [saveError, setSaveError] = useState('')
+  const [lastSavedSig, setLastSavedSig] = useState('')
 
   const lapSteps = useMemo(() => lapStepsFor(mode), [mode])
   // The final step is not lapped manually — stopping the timer records its time.
@@ -137,6 +143,66 @@ export default function App() {
       setTimeout(() => setCopied(false), 1500)
     } catch {
       /* clipboard blocked */
+    }
+  }
+
+  const buildPayload = () => {
+    const methodMap = { 'v60-no-ice': 'V60 - No Ice', 'v60-ice': 'V60 - With Ice', filter: 'Filter Coffee' }
+    const nowDate = new Date()
+    const today = nowDate.toISOString().slice(0, 10)
+    const hhmm = nowDate.toTimeString().slice(0, 5)
+    const modeLabel = MODES.find((m) => m.id === mode).label
+    const payload = {
+      brewName: `${modeLabel} · ${num(dose)}g · ${today} ${hhmm}`,
+      brewMethod: methodMap[mode],
+      coffee: num(dose),
+      totalWater: result.total,
+      bloomWater: result.bloomWater,
+      brewWater: result.target,
+      bloomTimeStr: timer.laps.bloom || bloomTime || '00:30',
+      date: today,
+      rating: rating === '' ? undefined : Number(rating),
+      notes: notes || undefined,
+      pour1Time: timer.laps.pour1 || undefined,
+      drawdownTime: timer.laps.drawdown || undefined,
+    }
+    if (mode === 'filter') {
+      payload.ratio = num(waterRatio) ?? 5
+      payload.milk = result.milk
+      payload.pour1Water = result.steps[1]?.cumulative // main pour → Pour 1
+    } else {
+      payload.ratio = num(ratio) ?? 16
+      if (mode === 'v60-ice') payload.ice = result.ice
+      payload.pour1Water = result.steps[1]?.cumulative
+      payload.pour2Water = result.steps[2]?.cumulative
+      payload.pour3Water = result.steps[3]?.cumulative
+      payload.pour2Time = timer.laps.pour2 || undefined
+      payload.pour3Time = timer.laps.pour3 || undefined
+    }
+    return payload
+  }
+
+  const handleSave = async () => {
+    if (!result.valid) return
+    // Warn (don't save) if the timer is still running.
+    if (timer.running) {
+      setSaveError('The brew timer is still running — stop it before saving.')
+      setSaveStatus('warn')
+      return
+    }
+    // Confirm before re-saving an unchanged brew (avoids accidental duplicate rows).
+    const sig = JSON.stringify({ mode, dose, ratio, iceFactor, waterRatio, milkRatio, bloom, bloomTime, laps: timer.laps, rating, notes })
+    if (sig === lastSavedSig && !window.confirm('You already saved this brew. Save it again as a new Logbook entry?')) return
+    setSaveStatus('saving')
+    setSaveError('')
+    try {
+      await saveBrew(buildPayload())
+      setLastSavedSig(sig)
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 4000)
+    } catch (e) {
+      setSaveError(e.message)
+      setSaveStatus('error')
     }
   }
 
@@ -311,6 +377,47 @@ export default function App() {
                     <p className="rounded-lg bg-red-50 px-3 py-2 text-red-700">⚠️ Remove the tamper / metal disk before brewing.</p>
                   </div>
                 )}
+
+                {/* Save to Notion Logbook (Phase 1 — write) */}
+                <div className="mt-4 border-t border-stone-100 pt-4">
+                  <div className="flex items-end gap-3">
+                    <label className="block">
+                      <span className="block text-xs font-medium text-stone-600">Rating /10 <span className="text-stone-400">(optional)</span></span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="10"
+                        value={rating}
+                        onChange={(e) => setRating(e.target.value)}
+                        onWheel={(e) => e.currentTarget.blur()}
+                        placeholder="—"
+                        className="mt-1 w-20 rounded-lg border border-stone-300 px-2 py-1 text-sm outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
+                      />
+                    </label>
+                  </div>
+                  <label className="mt-2 block">
+                    <span className="block text-xs font-medium text-stone-600">Tasting notes <span className="text-stone-400">(optional)</span></span>
+                    <textarea
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      rows={2}
+                      placeholder="e.g. bright, juicy, slightly sweet"
+                      className="mt-1 w-full rounded-lg border border-stone-300 px-2 py-1 text-sm outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
+                    />
+                  </label>
+                  <div className="mt-2 flex items-center gap-3">
+                    <button
+                      onClick={handleSave}
+                      disabled={saveStatus === 'saving'}
+                      className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                    >
+                      {saveStatus === 'saving' ? 'Saving…' : 'Save to Logbook'}
+                    </button>
+                    {saveStatus === 'saved' && <span className="text-sm font-medium text-green-700">✓ Saved to Notion</span>}
+                    {saveStatus === 'warn' && <span className="text-sm font-medium text-amber-700">{saveError}</span>}
+                    {saveStatus === 'error' && <span className="text-sm text-red-600">{saveError}</span>}
+                  </div>
+                </div>
               </>
             )}
 
