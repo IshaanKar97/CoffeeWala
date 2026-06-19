@@ -14,14 +14,14 @@ const FIELDS = [
   { key: 'date', label: 'Date', type: 'date' },
   { key: 'coffee', label: 'Coffee (g)', type: 'number' },
   { key: 'ratio', label: 'Ratio', type: 'number' },
-  { key: 'totalWater', label: 'Total water (g)', type: 'number' },
-  { key: 'bloomWater', label: 'Bloom water (g)', type: 'number' },
-  { key: 'brewWater', label: 'Brew water (g)', type: 'number' },
-  { key: 'ice', label: 'Ice (g)', type: 'number' },
-  { key: 'milk', label: 'Milk (g)', type: 'number' },
-  { key: 'pour1Water', label: 'Pour 1 (g)', type: 'number' },
-  { key: 'pour2Water', label: 'Pour 2 (g)', type: 'number' },
-  { key: 'pour3Water', label: 'Pour 3 (g)', type: 'number' },
+  { key: 'totalWater', label: 'Total water (g)', type: 'number', locked: true },
+  { key: 'bloomWater', label: 'Bloom water (g)', type: 'number', locked: true },
+  { key: 'brewWater', label: 'Brew water (g)', type: 'number', locked: true },
+  { key: 'ice', label: 'Ice (g)', type: 'number', locked: true },
+  { key: 'milk', label: 'Milk (g)', type: 'number', locked: true },
+  { key: 'pour1Water', label: 'Pour 1 (g)', type: 'number', locked: true },
+  { key: 'pour2Water', label: 'Pour 2 (g)', type: 'number', locked: true },
+  { key: 'pour3Water', label: 'Pour 3 (g)', type: 'number', locked: true },
   { key: 'bloomTime', label: 'Bloom time', type: 'text' },
   { key: 'pour1Time', label: 'Pour 1 time', type: 'text' },
   { key: 'pour2Time', label: 'Pour 2 time', type: 'text' },
@@ -86,6 +86,7 @@ function BrewCard({ brew, onOpen }) {
 function Detail({ brew, onClose, onRebrew, onSaved }) {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({})
+  const [initial, setInitial] = useState('')
   const [saveState, setSaveState] = useState('idle') // idle | saving | error
   const [saveError, setSaveError] = useState('')
 
@@ -95,10 +96,30 @@ function Detail({ brew, onClose, onRebrew, onSaved }) {
       f[key] = brew[key] == null ? '' : String(brew[key])
     })
     setForm(f)
+    setInitial(JSON.stringify(f))
     setSaveState('idle')
     setSaveError('')
     setEditing(true)
   }
+
+  const dirty = editing && JSON.stringify(form) !== initial
+
+  const cancelEdit = () => {
+    if (dirty && !window.confirm('Discard unsaved changes?')) return
+    setEditing(false)
+  }
+  const guardedClose = () => {
+    if (dirty && !window.confirm('Discard unsaved changes?')) return
+    onClose()
+  }
+
+  // Editing the recipe inputs can leave them out of step with the (locked) water
+  // amounts, which don't recalculate here — warn rather than block.
+  const coffeeN = parseFloat(form.coffee)
+  const ratioN = parseFloat(form.ratio)
+  const totalN = parseFloat(form.totalWater)
+  const inconsistent =
+    editing && !Number.isNaN(coffeeN) && !Number.isNaN(ratioN) && !Number.isNaN(totalN) && Math.round(coffeeN * ratioN) !== totalN
 
   const save = async () => {
     setSaveState('saving')
@@ -117,7 +138,7 @@ function Detail({ brew, onClose, onRebrew, onSaved }) {
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <button onClick={onClose} className="rounded-lg border border-stone-300 px-2.5 py-1 text-xs font-medium text-stone-700 hover:border-stone-400">
+        <button onClick={guardedClose} className="rounded-lg border border-stone-300 px-2.5 py-1 text-xs font-medium text-stone-700 hover:border-stone-400">
           <span className="md:hidden">← Back</span>
           <span className="hidden md:inline">✕ Close</span>
         </button>
@@ -133,7 +154,7 @@ function Detail({ brew, onClose, onRebrew, onSaved }) {
             </>
           ) : (
             <>
-              <button onClick={() => setEditing(false)} className="rounded-lg border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:border-stone-400">
+              <button onClick={cancelEdit} className="rounded-lg border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:border-stone-400">
                 Cancel
               </button>
               <button onClick={save} disabled={saveState === 'saving'} className="rounded-lg bg-amber-700 px-3 py-1 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-50">
@@ -171,30 +192,44 @@ function Detail({ brew, onClose, onRebrew, onSaved }) {
         </>
       ) : (
         <div className="space-y-3">
-          {FIELDS.map((f) => (
-            <label key={f.key} className="block">
-              <span className="block text-xs font-medium text-stone-600">{f.label}</span>
-              {f.type === 'select' ? (
-                <select value={form[f.key] ?? ''} onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-amber-600">
-                  {f.options.map((o) => (
-                    <option key={o} value={o}>
-                      {o}
-                    </option>
-                  ))}
-                </select>
-              ) : f.type === 'textarea' ? (
-                <textarea value={form[f.key] ?? ''} onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))} rows={2} className="mt-1 w-full rounded-lg border border-stone-300 px-2 py-1.5 text-sm outline-none focus:border-amber-600" />
-              ) : (
-                <input
-                  type={f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}
-                  value={form[f.key] ?? ''}
-                  onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}
-                  onWheel={f.type === 'number' ? (e) => e.currentTarget.blur() : undefined}
-                  className="mt-1 w-full rounded-lg border border-stone-300 px-2 py-1.5 text-sm outline-none focus:border-amber-600"
-                />
-              )}
-            </label>
-          ))}
+          {inconsistent && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Coffee × ratio = {Math.round(coffeeN * ratioN)} g, but the recorded total water is {totalN} g. Water amounts are locked and won’t recalculate here — use <span className="font-medium">Re-brew</span> to recompute them.
+            </p>
+          )}
+          {FIELDS.map((f) =>
+            f.locked ? (
+              <div key={f.key} className="flex items-center justify-between border-b border-stone-100 pb-1">
+                <span className="text-xs font-medium text-stone-600">{f.label}</span>
+                <span className="text-sm text-stone-500">
+                  {form[f.key] || '—'} <span className="ml-1 text-[10px] uppercase tracking-wide text-stone-400">locked</span>
+                </span>
+              </div>
+            ) : (
+              <label key={f.key} className="block">
+                <span className="block text-xs font-medium text-stone-600">{f.label}</span>
+                {f.type === 'select' ? (
+                  <select value={form[f.key] ?? ''} onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-amber-600">
+                    {f.options.map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                ) : f.type === 'textarea' ? (
+                  <textarea value={form[f.key] ?? ''} onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))} rows={2} className="mt-1 w-full rounded-lg border border-stone-300 px-2 py-1.5 text-sm outline-none focus:border-amber-600" />
+                ) : (
+                  <input
+                    type={f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}
+                    value={form[f.key] ?? ''}
+                    onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}
+                    onWheel={f.type === 'number' ? (e) => e.currentTarget.blur() : undefined}
+                    className="mt-1 w-full rounded-lg border border-stone-300 px-2 py-1.5 text-sm outline-none focus:border-amber-600"
+                  />
+                )}
+              </label>
+            )
+          )}
           {saveState === 'error' && <p className="text-sm text-red-600">{saveError}</p>}
         </div>
       )}
