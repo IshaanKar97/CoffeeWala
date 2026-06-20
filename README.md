@@ -30,6 +30,8 @@ npm test         # run the calculation unit tests
 npm run build    # production build into dist/
 ```
 
+> **Logbook (Notion sync) locally:** `npm run dev` (Vite) serves only the front-end, so the Logbook can't load there. To use it locally, create a `.env` with `NOTION_TOKEN=...` and run `npm run dev:netlify` (Netlify CLI — serves the app **and** the serverless functions at http://localhost:8888). `.env` is gitignored.
+
 ## Deployment (Netlify)
 
 The app is a static Vite build, configured for **Netlify** via `netlify.toml` (build command, publish dir, SPA redirect, pinned Node version).

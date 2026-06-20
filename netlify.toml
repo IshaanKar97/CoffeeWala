@@ -9,6 +9,14 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+[dev]
+  # `netlify dev` runs Vite (targetPort) and serves the app + functions on `port`.
+  # Use this (not plain `vite`) so the Logbook's functions work locally.
+  framework = "#custom"
+  command = "npm run dev"
+  targetPort = 5173
+  port = 8888
+
 [build.environment]
   # Pin a stable LTS for reproducible builds (Vite 6 needs Node 18+).
   NODE_VERSION = "20"

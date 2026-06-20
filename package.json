@@ -6,6 +6,7 @@
   "description": "Scale-based pour-over calculator for V60 (No Ice / With Ice) and South Indian Filter Coffee.",
   "scripts": {
     "dev": "vite",
+    "dev:netlify": "netlify dev --offline",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.13",
     "@vitejs/plugin-react": "^4.3.4",
+    "netlify-cli": "^26.1.0",
     "tailwindcss": "^4.1.13",
     "vite": "^6.3.5",
     "vitest": "^2.1.9"
