@@ -37,14 +37,20 @@ create index if not exists brews_user_instrument_idx on public.brews (user_id, i
 -- Row-Level Security: each user can only see/modify their own brews.
 alter table public.brews enable row level security;
 
+-- Drop-then-create so the migration is safely re-runnable (policies aren't
+-- idempotent via CREATE alone — re-running otherwise errors 42710).
+drop policy if exists "brews_select_own" on public.brews;
 create policy "brews_select_own" on public.brews
   for select using (auth.uid() = user_id);
 
+drop policy if exists "brews_insert_own" on public.brews;
 create policy "brews_insert_own" on public.brews
   for insert with check (auth.uid() = user_id);
 
+drop policy if exists "brews_update_own" on public.brews;
 create policy "brews_update_own" on public.brews
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists "brews_delete_own" on public.brews;
 create policy "brews_delete_own" on public.brews
   for delete using (auth.uid() = user_id);
