@@ -4,6 +4,8 @@ import Field from './components/Field.jsx'
 import { useBrewTimer, fmt } from './lib/useBrewTimer.js'
 import { saveBrew } from './lib/logbook.js'
 import Logbook from './components/Logbook.jsx'
+import { useAuth } from './context/AuthContext.jsx'
+import AuthPanel from './components/AuthPanel.jsx'
 
 const MODES = [
   { id: 'v60-no-ice', label: 'V60 — No Ice' },
@@ -81,6 +83,8 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState('idle') // idle | saving | saved | warn | error
   const [saveError, setSaveError] = useState('')
   const [lastSavedSig, setLastSavedSig] = useState('')
+  const { user, signOut } = useAuth()
+  const [authOpen, setAuthOpen] = useState(false)
 
   const lapSteps = useMemo(() => lapStepsFor(mode), [mode])
   // The final step is not lapped manually — stopping the timer records its time.
@@ -249,11 +253,25 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-stone-100 to-stone-200 text-stone-900">
       <div className="mx-auto max-w-3xl px-4 py-8">
-        <header className="mb-6">
-          <h1 className="text-3xl font-bold tracking-tight">☕ Coffee Brewing Calculator</h1>
-          <p className="mt-1 text-stone-600">
-            Scale-based pour targets. Tare the scale to zero after adding coffee — readings are cumulative.
-          </p>
+        <header className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">☕ Coffee Brewing Calculator</h1>
+            <p className="mt-1 text-stone-600">
+              Scale-based pour targets. Tare the scale to zero after adding coffee — readings are cumulative.
+            </p>
+          </div>
+          <div className="shrink-0 pt-1 text-right text-sm">
+            {user ? (
+              <div className="flex flex-col items-end gap-1">
+                <span className="max-w-[12rem] truncate text-stone-600" title={user.email}>{user.email}</span>
+                <button onClick={signOut} className="text-xs font-medium text-amber-700 hover:text-amber-900">Sign out</button>
+              </div>
+            ) : (
+              <button onClick={() => setAuthOpen(true)} className="rounded-lg bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800">
+                Sign in
+              </button>
+            )}
+          </div>
         </header>
 
         {/* View toggle: Calculator / Logbook */}
@@ -274,7 +292,17 @@ export default function App() {
           ))}
         </div>
 
-        {view === 'logbook' && <Logbook onRebrew={reBrew} />}
+        {view === 'logbook' &&
+          (user ? (
+            <Logbook onRebrew={reBrew} />
+          ) : (
+            <section className="rounded-2xl border border-stone-200 bg-white p-6 text-center shadow-sm">
+              <p className="text-stone-600">Sign in to view and manage your logbook.</p>
+              <button onClick={() => setAuthOpen(true)} className="mt-3 rounded-lg bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-800">
+                Sign in
+              </button>
+            </section>
+          ))}
 
         {view === 'calculator' && (
           <>
@@ -475,45 +503,53 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Save to Notion Logbook (Phase 1 — write) */}
+                {/* Save to logbook — requires sign-in (Phase 2 multi-user) */}
                 <div className="mt-4 border-t border-stone-100 pt-4">
-                  <div className="flex items-end gap-3">
-                    <label className="block">
-                      <span className="block text-xs font-medium text-stone-600">Rating /10 <span className="text-stone-400">(optional)</span></span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="10"
-                        value={rating}
-                        onChange={(e) => setRating(e.target.value)}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        placeholder="—"
-                        className="mt-1 w-20 rounded-lg border border-stone-300 px-2 py-1 text-sm outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
-                      />
-                    </label>
-                  </div>
-                  <label className="mt-2 block">
-                    <span className="block text-xs font-medium text-stone-600">Tasting notes <span className="text-stone-400">(optional)</span></span>
-                    <textarea
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      rows={2}
-                      placeholder="e.g. bright, juicy, slightly sweet"
-                      className="mt-1 w-full rounded-lg border border-stone-300 px-2 py-1 text-sm outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
-                    />
-                  </label>
-                  <div className="mt-2 flex items-center gap-3">
-                    <button
-                      onClick={handleSave}
-                      disabled={saveStatus === 'saving'}
-                      className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
-                    >
-                      {saveStatus === 'saving' ? 'Saving…' : 'Save to Logbook'}
-                    </button>
-                    {saveStatus === 'saved' && <span className="text-sm font-medium text-green-700">✓ Saved to Notion</span>}
-                    {saveStatus === 'warn' && <span className="text-sm font-medium text-amber-700">{saveError}</span>}
-                    {saveStatus === 'error' && <span className="text-sm text-red-600">{saveError}</span>}
-                  </div>
+                  {user ? (
+                    <>
+                      <div className="flex items-end gap-3">
+                        <label className="block">
+                          <span className="block text-xs font-medium text-stone-600">Rating /10 <span className="text-stone-400">(optional)</span></span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="10"
+                            value={rating}
+                            onChange={(e) => setRating(e.target.value)}
+                            onWheel={(e) => e.currentTarget.blur()}
+                            placeholder="—"
+                            className="mt-1 w-20 rounded-lg border border-stone-300 px-2 py-1 text-sm outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
+                          />
+                        </label>
+                      </div>
+                      <label className="mt-2 block">
+                        <span className="block text-xs font-medium text-stone-600">Tasting notes <span className="text-stone-400">(optional)</span></span>
+                        <textarea
+                          value={notes}
+                          onChange={(e) => setNotes(e.target.value)}
+                          rows={2}
+                          placeholder="e.g. bright, juicy, slightly sweet"
+                          className="mt-1 w-full rounded-lg border border-stone-300 px-2 py-1 text-sm outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
+                        />
+                      </label>
+                      <div className="mt-2 flex items-center gap-3">
+                        <button
+                          onClick={handleSave}
+                          disabled={saveStatus === 'saving'}
+                          className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                        >
+                          {saveStatus === 'saving' ? 'Saving…' : 'Save to Logbook'}
+                        </button>
+                        {saveStatus === 'saved' && <span className="text-sm font-medium text-green-700">✓ Saved</span>}
+                        {saveStatus === 'warn' && <span className="text-sm font-medium text-amber-700">{saveError}</span>}
+                        {saveStatus === 'error' && <span className="text-sm text-red-600">{saveError}</span>}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-stone-600">
+                      <button onClick={() => setAuthOpen(true)} className="font-medium text-amber-700 hover:underline">Sign in</button> to save this brew to your logbook.
+                    </p>
+                  )}
                 </div>
               </>
             )}
@@ -528,6 +564,7 @@ export default function App() {
           Coffee Brewing Calculator · v1
         </footer>
       </div>
+      {authOpen && <AuthPanel onClose={() => setAuthOpen(false)} />}
     </div>
   )
 }
