@@ -5,11 +5,18 @@ import { createClient } from '@supabase/supabase-js'
 const url = import.meta.env.VITE_SUPABASE_URL
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (!url || !anonKey) {
+export const isSupabaseConfigured = Boolean(url && anonKey)
+
+if (!isSupabaseConfigured) {
   console.warn(
-    'Supabase not configured — set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env (and Netlify env for production).',
+    'Supabase not configured — set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (.env locally, Netlify env in production). Auth/logbook are disabled until then.',
   )
 }
 
-export const supabase = createClient(url ?? '', anonKey ?? '')
-export const isSupabaseConfigured = Boolean(url && anonKey)
+// Use a harmless placeholder when unconfigured so createClient() does NOT throw
+// and crash the whole app. The calculator + timer keep working; auth/data
+// features stay gated off (see isSupabaseConfigured).
+export const supabase = createClient(
+  url || 'https://placeholder.supabase.co',
+  anonKey || 'placeholder-anon-key',
+)
