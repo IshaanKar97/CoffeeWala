@@ -2,6 +2,8 @@
 
 > **Source of truth:** The Notion PRD governs all requirements. This file mirrors the PRD's approved calculation logic (reconciled 2026-06-19). If the two ever diverge, the PRD wins.
 
+> ⚠️ **Phase 2 refresh pending.** The modes below describe the **Phase 1** model. Phase 2 (built 2026-06-26) restructured the calculator into **Instrument × Brewing Method + ice toggle**: V60 methods **1-Pour / 3-Pour / 10-Pour / Advanced** (ice as a toggle on all; bloom fixed 2×dose except Advanced); Filter **With Milk / With Water** (dilution water = dose × dilution ratio). **Filter Coffee now has NO bloom** — a single full decoction pour (client decision 2026-06-26), superseding "Mode C" below. A full Phase 2 rewrite of this file is tracked as doc debt; the authoritative formulas live in `src/lib/calculations.js` + its tests and the Phase 2 PRD §3.
+
 ## Table of Contents
 
 1. [Shared Concepts](#shared-concepts)
