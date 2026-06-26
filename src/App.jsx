@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { calculate, defaultBloom, DEFAULTS, V60_POURS } from './lib/calculations.js'
-import Field from './components/Field.jsx'
+import Field, { TimeField } from './components/Field.jsx'
 import { useBrewTimer, fmt } from './lib/useBrewTimer.js'
 import { saveBrew } from './lib/logbook.js'
 import Logbook from './components/Logbook.jsx'
@@ -155,6 +155,38 @@ export default function App() {
   }, [instrument, v60Method, filterMethod, dose, ratio, iceOn, iceFactor, advTotal, advBloom, advNPours, waterRatio, milkRatio, dilutionRatio])
 
   const result = useMemo(() => calculate(inputs), [inputs])
+
+  // Inline validation: map each error to its input field (first message wins);
+  // keep the last valid recipe on screen so bad input doesn't blank everything.
+  const fieldErrors = useMemo(() => {
+    const m = {}
+    if (!result.valid) for (const e of result.errors) if (e.field && !m[e.field]) m[e.field] = e.message
+    return m
+  }, [result])
+  const [lastValid, setLastValid] = useState(null)
+  useEffect(() => {
+    if (result.valid) setLastValid(result)
+  }, [result])
+  const shown = result.valid ? result : lastValid
+
+  // Advanced: a directly-entered total water overrides the ratio.
+  const advOverride = isAdvanced && num(advTotal) > 0
+  const computedRatio = advOverride && num(dose) > 0 ? Math.round((num(advTotal) / num(dose)) * 10) / 10 : null
+
+  // Errors whose field isn't a visible input (e.g. fixed-bloom vs total) get a small summary.
+  const visibleFieldKeys = useMemo(() => {
+    const keys = new Set(['dose'])
+    if (instrument === 'filter') {
+      keys.add('waterRatio')
+      keys.add(filterMethod === 'with-milk' ? 'milkRatio' : 'dilutionRatio')
+    } else {
+      keys.add('ratio')
+      if (iceOn) keys.add('iceFactor')
+      if (isAdvanced) { keys.add('totalWater'); keys.add('nPours'); keys.add('bloom') }
+    }
+    return keys
+  }, [instrument, filterMethod, iceOn, isAdvanced])
+  const unmappedErrors = result.valid ? [] : result.errors.filter((e) => !visibleFieldKeys.has(e.field))
 
   // Persist inputs across sessions.
   useEffect(() => {
@@ -446,53 +478,57 @@ export default function App() {
               </button>
             </div>
             <div className="space-y-4">
-              <Field label="Coffee dose" value={dose} onChange={setDose} suffix="g" placeholder="e.g. 20" />
+              <Field label="Coffee dose" value={dose} onChange={setDose} suffix="g" placeholder="e.g. 20" error={fieldErrors.dose} />
 
               {instrument === 'filter' ? (
                 <>
-                  <Field label="Water ratio" value={waterRatio} onChange={setWaterRatio} suffix="×" hint="Decoction water = dose × ratio (default 5)" />
+                  <Field label="Water ratio" value={waterRatio} onChange={setWaterRatio} suffix="×" hint="Decoction water = dose × ratio (default 5)" error={fieldErrors.waterRatio} />
                   {filterMethod === 'with-milk' ? (
-                    <Field label="Milk ratio" value={milkRatio} onChange={setMilkRatio} suffix="×" hint="Milk to serve = dose × ratio (default 3)" />
+                    <Field label="Milk ratio" value={milkRatio} onChange={setMilkRatio} suffix="×" hint="Milk to serve = dose × ratio (default 3)" error={fieldErrors.milkRatio} />
                   ) : (
-                    <Field label="Water (dilution) ratio" value={dilutionRatio} onChange={setDilutionRatio} suffix="×" hint="Dilution water = dose × ratio (default 4)" />
+                    <Field label="Water (dilution) ratio" value={dilutionRatio} onChange={setDilutionRatio} suffix="×" hint="Dilution water = dose × ratio (default 4)" error={fieldErrors.dilutionRatio} />
                   )}
                 </>
               ) : (
                 <>
-                  <Field label="Ratio" value={ratio} onChange={setRatio} suffix="×" hint={isAdvanced ? 'Total = dose × ratio (overridden if you set total water below)' : 'Total water = dose × ratio (default 16)'} />
+                  <Field
+                    label="Ratio"
+                    value={ratio}
+                    onChange={setRatio}
+                    suffix="×"
+                    disabled={advOverride}
+                    hint={advOverride ? `Overridden by total water${computedRatio ? ` (≈ ${computedRatio}×)` : ''}` : isAdvanced ? 'Total = dose × ratio · or set total water below' : 'Total water = dose × ratio (default 16)'}
+                    error={fieldErrors.ratio}
+                  />
+                  {advOverride && (
+                    <button onClick={() => setAdvTotal('')} className="-mt-2 block text-xs font-medium text-amber-700 hover:text-amber-900">
+                      Use ratio instead (clear total water)
+                    </button>
+                  )}
 
                   {isAdvanced && (
                     <>
-                      <Field label="Total water (optional)" value={advTotal} onChange={setAdvTotal} suffix="g" placeholder="overrides ratio" hint="Enter to set total directly; overrides the ratio" />
-                      <Field label="Number of pours" value={advNPours} onChange={setAdvNPours} step="1" hint="Pours after bloom, split equally" />
-                      <Field label="Bloom water" value={advBloom} onChange={setAdvBloom} suffix="g" placeholder={advBloomPlaceholder} hint="Editable in Advanced — leave blank for 2 × dose" />
+                      <Field label="Total water (optional)" value={advTotal} onChange={setAdvTotal} suffix="g" placeholder="overrides ratio" hint={advOverride ? 'Driving the recipe — ratio is ignored' : 'Enter to set total directly; overrides the ratio'} error={fieldErrors.totalWater} />
+                      <Field label="Number of pours" value={advNPours} onChange={setAdvNPours} step="1" hint="Pours after bloom, split equally" error={fieldErrors.nPours} />
+                      <Field label="Bloom water" value={advBloom} onChange={setAdvBloom} suffix="g" placeholder={advBloomPlaceholder} hint="Editable in Advanced — leave blank for 2 × dose" error={fieldErrors.bloom} />
                     </>
                   )}
 
                   {isV60Preset && (
                     <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2">
                       <div className="text-xs uppercase tracking-wide text-stone-500">Bloom water (fixed)</div>
-                      <div className="text-sm font-medium text-stone-800">{presetBloom} <span className="ml-1 text-xs font-normal text-stone-500">2 × dose</span></div>
+                      <div className="text-sm font-medium text-stone-800">{presetBloom} <span className="ml-1 text-xs font-normal text-stone-500">2 × dose · editable in Advanced</span></div>
                     </div>
                   )}
 
                   {iceOn && (
-                    <Field label="Ice factor" value={iceFactor} onChange={setIceFactor} step="0.05" suffix="×" hint="Ice = total water × factor (default 0.4)" />
+                    <Field label="Ice factor" value={iceFactor} onChange={setIceFactor} step="0.05" suffix="×" hint="Ice = total water × factor (default 0.4)" error={fieldErrors.iceFactor} />
                   )}
                 </>
               )}
 
               {instrument === 'v60' && (
-                <label className="block">
-                  <span className="block text-sm font-medium text-stone-700">Bloom time</span>
-                  <input
-                    type="text"
-                    value={bloomTime}
-                    onChange={(e) => setBloomTime(e.target.value)}
-                    placeholder="00:30"
-                    className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
-                  />
-                </label>
+                <TimeField label="Bloom time" value={bloomTime} onChange={setBloomTime} hint="Rest after the bloom pour" />
               )}
 
               {instrument === 'v60' && (
@@ -567,23 +603,35 @@ export default function App() {
               </div>
             </div>
 
-            {!result.valid ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                <ul className="list-inside list-disc space-y-1">
-                  {result.errors.map((e, i) => (
-                    <li key={i}>{e}</li>
-                  ))}
-                </ul>
+            {!shown ? (
+              <div className="rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm text-stone-500">
+                Enter a coffee dose to see your recipe.
+                {unmappedErrors.length > 0 && (
+                  <ul className="mt-2 list-inside list-disc text-amber-800">
+                    {unmappedErrors.map((e, i) => <li key={i}>{e.message}</li>)}
+                  </ul>
+                )}
               </div>
             ) : (
-              <>
+              <div className={result.valid ? '' : 'opacity-60'}>
+                {!result.valid && (
+                  <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    Showing your last valid recipe — fix the highlighted inputs to update.
+                    {unmappedErrors.length > 0 && (
+                      <ul className="mt-1 list-inside list-disc">
+                        {unmappedErrors.map((e, i) => <li key={i}>{e.message}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
                 <div className="mb-4 grid grid-cols-2 gap-2">
-                  <Stat label="Total water" value={`${result.total} g`} accent />
-                  {instrument === 'v60' && iceOn && <Stat label="Ice (in vessel)" value={`${result.ice} g`} />}
-                  {instrument === 'v60' && iceOn && <Stat label="Brew water" value={`${result.brewWater} g`} />}
-                  {instrument === 'filter' && filterMethod === 'with-milk' && <Stat label="Milk to serve" value={`${result.milk} g`} />}
-                  {instrument === 'filter' && filterMethod === 'with-water' && <Stat label="Dilution water" value={`${result.dilutionWater} g`} />}
-                  {instrument === 'v60' && <Stat label="Bloom" value={`${result.bloomWater} g`} />}
+                  <Stat label="Total water" value={`${shown.total} g`} accent />
+                  {shown.instrument === 'v60' && shown.withIce && <Stat label="Ice (in vessel)" value={`${shown.ice} g`} />}
+                  {shown.instrument === 'v60' && shown.withIce && <Stat label="Brew water" value={`${shown.brewWater} g`} />}
+                  {shown.instrument === 'filter' && shown.method === 'with-milk' && <Stat label="Milk to serve" value={`${shown.milk} g`} />}
+                  {shown.instrument === 'filter' && shown.method === 'with-water' && <Stat label="Dilution water" value={`${shown.dilutionWater} g`} />}
+                  {shown.instrument === 'v60' && <Stat label="Bloom" value={`${shown.bloomWater} g`} />}
                 </div>
 
                 <div className="max-h-80 overflow-y-auto">
@@ -593,61 +641,70 @@ export default function App() {
                         <th className="py-2 font-medium">Step</th>
                         <th className="py-2 text-right font-medium">Add (g)</th>
                         <th className="py-2 text-right font-medium">Reads (g)</th>
-                        <th className="py-2 pl-2 text-right font-medium">Time</th>
+                        {result.valid && <th className="py-2 pl-2 text-right font-medium">Time</th>}
                       </tr>
                     </thead>
                     <tbody>
-                      {lapSteps.map((ls, i) => {
-                        const step = result.steps[i]
-                        const isTerminal = ls.key === terminalKey
-                        const placeholder = isTerminal ? 'on stop' : ls.key === 'bloom' ? bloomTime || '00:30' : 'mm:ss'
-                        return (
-                          <tr key={ls.key} className="border-b border-stone-100 last:border-0">
-                            <td className="py-2 font-medium text-stone-800">{ls.label}</td>
-                            <td className="py-2 text-right tabular-nums">{step ? `+${step.add}` : '—'}</td>
-                            <td className="py-2 text-right font-semibold tabular-nums">{step ? step.cumulative : '—'}</td>
-                            <td className="py-2 pl-2">
-                              <div className="flex items-center justify-end gap-1">
-                                {!isTerminal && (
-                                  <button
-                                    onClick={() => timer.lap(ls.key)}
-                                    title={`Lap ${ls.label}`}
-                                    className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
-                                  >
-                                    Lap
-                                  </button>
-                                )}
-                                <input
-                                  type="text"
-                                  value={timer.laps[ls.key] ?? ''}
-                                  placeholder={placeholder}
-                                  onChange={(e) => timer.editLap(ls.key, e.target.value)}
-                                  className="w-14 rounded border border-stone-300 px-1 py-0.5 text-center font-mono text-xs tabular-nums outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
-                                />
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      })}
+                      {result.valid
+                        ? lapSteps.map((ls, i) => {
+                            const step = result.steps[i]
+                            const isTerminal = ls.key === terminalKey
+                            const placeholder = isTerminal ? 'on stop' : ls.key === 'bloom' ? bloomTime || '00:30' : 'mm:ss'
+                            return (
+                              <tr key={ls.key} className="border-b border-stone-100 last:border-0">
+                                <td className="py-2 font-medium text-stone-800">{ls.label}</td>
+                                <td className="py-2 text-right tabular-nums">{step ? `+${step.add}` : '—'}</td>
+                                <td className="py-2 text-right font-semibold tabular-nums">{step ? step.cumulative : '—'}</td>
+                                <td className="py-2 pl-2">
+                                  <div className="flex items-center justify-end gap-1">
+                                    {!isTerminal && (
+                                      <button
+                                        onClick={() => timer.lap(ls.key)}
+                                        title={`Lap ${ls.label}`}
+                                        className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+                                      >
+                                        Lap
+                                      </button>
+                                    )}
+                                    <input
+                                      type="text"
+                                      value={timer.laps[ls.key] ?? ''}
+                                      placeholder={placeholder}
+                                      onChange={(e) => timer.editLap(ls.key, e.target.value)}
+                                      className="w-14 rounded border border-stone-300 px-1 py-0.5 text-center font-mono text-xs tabular-nums outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/30"
+                                    />
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })
+                        : shown.steps.map((s, i) => (
+                            <tr key={i} className="border-b border-stone-100 last:border-0">
+                              <td className="py-2 font-medium text-stone-800">{s.label}</td>
+                              <td className="py-2 text-right tabular-nums">+{s.add}</td>
+                              <td className="py-2 text-right font-semibold tabular-nums">{s.cumulative}</td>
+                            </tr>
+                          ))}
                     </tbody>
                   </table>
                 </div>
 
-                {instrument === 'filter' && (
+                {shown.instrument === 'filter' && (
                   <div className="mt-4 space-y-2 text-sm text-stone-600">
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-red-700">⚠️ Remove the tamper / metal disk before brewing.</p>
                     <p>🌀 Main pour: spiral from center, swirl, lid on.</p>
-                    {filterMethod === 'with-milk' && (
-                      <p>🥛 Heat &amp; serve <span className="font-semibold text-stone-800">{result.milk} g</span> milk alongside the decoction.</p>
+                    {shown.method === 'with-milk' && (
+                      <p>🥛 Heat &amp; serve <span className="font-semibold text-stone-800">{shown.milk} g</span> milk alongside the decoction.</p>
                     )}
-                    {filterMethod === 'with-water' && (
-                      <p>💧 Dilute the decoction with <span className="font-semibold text-stone-800">{result.dilutionWater} g</span> hot water to taste.</p>
+                    {shown.method === 'with-water' && (
+                      <p>💧 Dilute the decoction with <span className="font-semibold text-stone-800">{shown.dilutionWater} g</span> hot water to taste.</p>
                     )}
                     <p>🌡️ Water 80–85 °C · expected drawdown 7–10 min.</p>
-                    <p className="rounded-lg bg-red-50 px-3 py-2 text-red-700">⚠️ Remove the tamper / metal disk before brewing.</p>
                   </div>
                 )}
 
                 {/* Save to logbook — requires sign-in (Phase 2 multi-user) */}
+                {result.valid && (
                 <div className="mt-4 border-t border-stone-100 pt-4">
                   {user ? (
                     <>
@@ -695,7 +752,8 @@ export default function App() {
                     </p>
                   )}
                 </div>
-              </>
+                )}
+              </div>
             )}
 
             <p className="mt-4 text-xs text-stone-400">Values rounded to whole grams.</p>
