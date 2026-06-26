@@ -72,38 +72,38 @@ export function calcV60({
 } = {}) {
   const errors = []
   const advanced = method === 'advanced'
-  if (!(dose > 0)) errors.push('Enter a coffee dose greater than 0 g.')
+  if (!(dose > 0)) errors.push({ field: 'dose', message: 'Enter a coffee dose greater than 0 g.' })
 
   // Total water: Advanced may enter it directly (overrides ratio); otherwise dose × ratio.
   let total
   const explicitTotal = advanced && totalWater != null && String(totalWater) !== '' && !Number.isNaN(totalWater)
   if (explicitTotal) {
     total = round(totalWater)
-    if (!(total > 0)) errors.push('Total water must be greater than 0 g.')
+    if (!(total > 0)) errors.push({ field: 'totalWater', message: 'Total water must be greater than 0 g.' })
   } else {
-    if (!(ratio > 0)) errors.push('Ratio must be greater than 0.')
+    if (!(ratio > 0)) errors.push({ field: 'ratio', message: 'Ratio must be greater than 0.' })
     total = round(dose * ratio)
   }
 
-  if (iceOn && !(iceFactor > 0 && iceFactor < 1)) errors.push('Ice factor must be between 0 and 1.')
+  if (iceOn && !(iceFactor > 0 && iceFactor < 1)) errors.push({ field: 'iceFactor', message: 'Ice factor must be between 0 and 1.' })
 
   // Pour count.
   let n
   if (advanced) {
     n = Math.trunc(Number(nPours))
-    if (!(n >= 1)) errors.push('Number of pours must be a whole number ≥ 1.')
+    if (!(n >= 1)) errors.push({ field: 'nPours', message: 'Number of pours must be a whole number ≥ 1.' })
   } else {
     n = V60_POURS[method]
-    if (!n) errors.push(`Unknown V60 method: ${method}`)
+    if (!n) errors.push({ field: 'method', message: `Unknown V60 method: ${method}` })
   }
   if (errors.length) return { valid: false, errors }
 
   const ice = iceOn ? round(total * iceFactor) : 0
   const target = total - ice // brew water (= total when no ice)
   const bloomWater = advanced ? resolveBloom(dose, bloom) : defaultBloom(dose)
-  if (!(bloomWater > 0)) errors.push('Bloom water must be greater than 0 g.')
+  if (!(bloomWater > 0)) errors.push({ field: 'bloom', message: 'Bloom water must be greater than 0 g.' })
   if (bloomWater >= target) {
-    errors.push(iceOn ? 'Bloom water must be less than brew water (lower the ice factor or bloom).' : 'Bloom water must be less than total water.')
+    errors.push({ field: 'bloom', message: iceOn ? 'Bloom water must be less than brew water (lower the ice factor or bloom).' : 'Bloom water must be less than total water.' })
   }
   if (errors.length) return { valid: false, errors }
 
@@ -143,12 +143,12 @@ export function calcFilter({
 } = {}) {
   const errors = []
   const withWater = method === 'with-water'
-  if (!(dose > 0)) errors.push('Enter a coffee dose greater than 0 g.')
-  if (!(waterRatio > 0)) errors.push('Water ratio must be greater than 0.')
+  if (!(dose > 0)) errors.push({ field: 'dose', message: 'Enter a coffee dose greater than 0 g.' })
+  if (!(waterRatio > 0)) errors.push({ field: 'waterRatio', message: 'Water ratio must be greater than 0.' })
   if (withWater) {
-    if (!(dilutionRatio >= 0)) errors.push('Water (dilution) ratio must be 0 or greater.')
+    if (!(dilutionRatio >= 0)) errors.push({ field: 'dilutionRatio', message: 'Water (dilution) ratio must be 0 or greater.' })
   } else {
-    if (!(milkRatio >= 0)) errors.push('Milk ratio must be 0 or greater.')
+    if (!(milkRatio >= 0)) errors.push({ field: 'milkRatio', message: 'Milk ratio must be 0 or greater.' })
   }
   if (errors.length) return { valid: false, errors }
 
@@ -173,6 +173,6 @@ export function calculate({ instrument, ...inputs } = {}) {
     case 'filter':
       return calcFilter(inputs)
     default:
-      return { valid: false, errors: [`Unknown instrument: ${instrument}`] }
+      return { valid: false, errors: [{ field: 'instrument', message: `Unknown instrument: ${instrument}` }] }
   }
 }
