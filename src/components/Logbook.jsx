@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { List } from 'react-window'
 import { listBrews, updateBrew, deleteBrew } from '../lib/logbook.js'
+import { useAuth } from '../context/AuthContext.jsx'
+import { supabase } from '../lib/supabase.js'
 
-// Phase 2 Recipe Book (Task 7): Supabase-backed combined cross-instrument view,
-// tablet table + right split detail, mobile cards → full-page detail, page-size
-// selector + load-more (Supabase range pagination), virtualized list. Chip
-// filters / date+time naming / column show-hide are Task 8.
+// Phase 2 Recipe Book — Task 7 (combined view, split/full detail, list scaling,
+// virtualized) + Task 8 (chip filters persisted per-account, date+time naming,
+// column show/hide).
 
 const INSTRUMENT_LABEL = { v60: 'V60', filter: 'Filter Coffee', mokka: 'Mokka-Pot' }
 const METHOD_LABEL = {
@@ -19,10 +20,38 @@ const INSTRUMENT_COLOR = {
 }
 
 const PAGE_SIZE_KEY = 'cbc-logbook-pagesize'
+const COLUMNS_KEY = 'cbc-logbook-columns'
 const PRESET_SIZES = [25, 30, 50]
 const loadPageSize = () => {
   const n = parseInt(localStorage.getItem(PAGE_SIZE_KEY) || '25', 10)
   return Number.isFinite(n) && n >= 1 && n <= 100 ? n : 25
+}
+
+// ---- columns -------------------------------------------------------------
+const ALL_COLUMNS = [
+  { key: 'name', label: 'Recipe', width: 'minmax(150px,1.5fr)', always: true },
+  { key: 'coffee', label: 'Coffee', width: '64px', align: 'right' },
+  { key: 'ratio', label: 'Ratio', width: '52px', align: 'right' },
+  { key: 'ice', label: 'Ice', width: '52px', align: 'right' },
+  { key: 'bloom', label: 'Bloom', width: '56px', align: 'right' },
+  { key: 'total', label: 'Total', width: '58px', align: 'right' },
+  ...Array.from({ length: 10 }, (_, i) => ({ key: `p${i + 1}w`, label: `P${i + 1}`, width: '46px', align: 'right' })),
+  ...Array.from({ length: 10 }, (_, i) => ({ key: `p${i + 1}t`, label: `P${i + 1}t`, width: '58px', align: 'right' })),
+  { key: 'grind', label: 'Grind', width: '96px' },
+  { key: 'temp', label: 'Temp', width: '64px', align: 'right' },
+  { key: 'drawdown', label: 'Draw', width: '60px', align: 'right' },
+  { key: 'milk', label: 'Milk', width: '56px', align: 'right' },
+  { key: 'dilution', label: 'Dilution', width: '64px', align: 'right' },
+  { key: 'rating', label: 'Rating', width: '60px', align: 'right' },
+]
+const DEFAULT_VISIBLE = ['name', 'coffee', 'ratio', 'ice', 'bloom', 'p1w', 'p2w', 'p3w', 'rating']
+const COMPACT_VISIBLE = ['name', 'coffee', 'rating']
+const loadColumns = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COLUMNS_KEY))
+    if (Array.isArray(saved) && saved.length) return saved
+  } catch { /* ignore */ }
+  return DEFAULT_VISIBLE
 }
 
 const methodTitle = (b) => {
@@ -37,6 +66,27 @@ const fmtDateTime = (b) => {
   return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 const g = (v) => (v == null || v === '' ? '—' : `${v} g`)
+
+function cellValue(key, b) {
+  const mw = key.match(/^p(\d+)w$/)
+  if (mw) { const p = b.pours && b.pours[+mw[1] - 1]; return p && p.water != null ? p.water : '—' }
+  const mt = key.match(/^p(\d+)t$/)
+  if (mt) { const p = b.pours && b.pours[+mt[1] - 1]; return p && p.time ? p.time : '—' }
+  switch (key) {
+    case 'coffee': return b.coffee != null ? `${b.coffee} g` : '—'
+    case 'ratio': return b.ratio != null ? `1:${b.ratio}` : '—'
+    case 'ice': return b.withIce && b.ice != null ? `${b.ice} g` : '—'
+    case 'bloom': return b.bloomWater != null ? `${b.bloomWater} g` : '—'
+    case 'total': return b.totalWater != null ? `${b.totalWater} g` : '—'
+    case 'grind': return b.grindSize || '—'
+    case 'temp': return b.waterTemp || '—'
+    case 'drawdown': return b.drawdownTime || '—'
+    case 'milk': return b.milk != null ? `${b.milk} g` : '—'
+    case 'dilution': return b.dilutionWater != null ? `${b.dilutionWater} g` : '—'
+    case 'rating': return b.rating != null ? `${b.rating}/10` : '—'
+    default: return '—'
+  }
+}
 
 function useIsDesktop() {
   const [d, setD] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches)
@@ -57,51 +107,122 @@ function InstrumentBadge({ brew }) {
   )
 }
 
-// Grid templates shared by the table header + virtualized rows.
-const COLS_FULL = 'minmax(112px,1.2fr) 52px 48px 48px 52px 44px 44px 44px 52px'
-const COLS_COMPACT = 'minmax(140px,1fr) 64px 64px'
+// ---- chip filters --------------------------------------------------------
+const DEFAULT_FILTERS = { instrument: 'all', ice: 'all', ratingMin: 0, date: { mode: 'all', from: '', to: '' } }
+const RATING_STEPS = [0, 3, 6, 7, 8, 9]
 
-function TableHeader({ compact }) {
-  const cells = compact ? ['Recipe', 'Coffee', 'Rating'] : ['Recipe', 'Coffee', 'Ratio', 'Ice', 'Bloom', 'P1', 'P2', 'P3', 'Rating']
+function Chip({ active, onClick, children }) {
   return (
-    <div
-      className="grid gap-2 border-b border-stone-200 px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-stone-500"
-      style={{ gridTemplateColumns: compact ? COLS_COMPACT : COLS_FULL }}
+    <button
+      onClick={onClick}
+      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${active ? 'border-amber-600 bg-amber-700 text-white' : 'border-stone-300 bg-white text-stone-600 hover:border-amber-500'}`}
     >
-      {cells.map((c, i) => (
-        <div key={c} className={i === 0 ? '' : 'text-right'}>{c}</div>
-      ))}
+      {children}
+    </button>
+  )
+}
+
+function Filters({ filters, setFilters }) {
+  const set = (patch) => setFilters((f) => ({ ...f, ...patch }))
+  const setDate = (patch) => setFilters((f) => ({ ...f, date: { ...f.date, ...patch } }))
+  return (
+    <div className="mb-3 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-xs font-medium uppercase tracking-wide text-stone-400">Instrument</span>
+        <Chip active={filters.instrument === 'all'} onClick={() => set({ instrument: 'all' })}>All</Chip>
+        <Chip active={filters.instrument === 'v60'} onClick={() => set({ instrument: 'v60' })}>V60</Chip>
+        <Chip active={filters.instrument === 'filter'} onClick={() => set({ instrument: 'filter' })}>Filter</Chip>
+        <span className="ml-3 mr-1 text-xs font-medium uppercase tracking-wide text-stone-400">Ice</span>
+        <Chip active={filters.ice === 'all'} onClick={() => set({ ice: 'all' })}>All</Chip>
+        <Chip active={filters.ice === 'with'} onClick={() => set({ ice: 'with' })}>Ice</Chip>
+        <Chip active={filters.ice === 'without'} onClick={() => set({ ice: 'without' })}>No ice</Chip>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-xs font-medium uppercase tracking-wide text-stone-400">Rating</span>
+        {RATING_STEPS.map((r) => (
+          <Chip key={r} active={filters.ratingMin === r} onClick={() => set({ ratingMin: r })}>{r}+</Chip>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-xs font-medium uppercase tracking-wide text-stone-400">Date</span>
+        {[['all', 'All'], ['today', 'Today'], ['7d', 'Last 7d'], ['30d', 'Last 30d'], ['custom', 'Custom']].map(([m, label]) => (
+          <Chip key={m} active={filters.date.mode === m} onClick={() => setDate({ mode: m })}>{label}</Chip>
+        ))}
+        {filters.date.mode === 'custom' && (
+          <span className="flex items-center gap-1 text-xs text-stone-500">
+            <input type="date" value={filters.date.from} onChange={(e) => setDate({ from: e.target.value })} className="rounded border border-stone-300 px-1.5 py-0.5 outline-none focus:border-amber-600" />
+            <span>→</span>
+            <input type="date" value={filters.date.to} onChange={(e) => setDate({ to: e.target.value })} className="rounded border border-stone-300 px-1.5 py-0.5 outline-none focus:border-amber-600" />
+          </span>
+        )}
+      </div>
     </div>
   )
 }
 
-// react-window row: a table row (desktop) or a card (mobile).
-function Row({ index, style, brews, selectedId, onSelect, compact, isDesktop }) {
+function ColumnsMenu({ visible, setVisible }) {
+  const [open, setOpen] = useState(false)
+  const toggle = (key) => {
+    setVisible((cur) => {
+      const next = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
+      // keep canonical order
+      return ALL_COLUMNS.filter((c) => next.includes(c.key)).map((c) => c.key)
+    })
+  }
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)} className="rounded-lg border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:border-amber-600 hover:text-amber-800">
+        Columns ▾
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1 max-h-72 w-44 overflow-y-auto rounded-lg border border-stone-200 bg-white p-2 shadow-lg">
+            {ALL_COLUMNS.map((c) => (
+              <label key={c.key} className={`flex items-center gap-2 px-1 py-0.5 text-xs ${c.always ? 'text-stone-400' : 'text-stone-700'}`}>
+                <input
+                  type="checkbox"
+                  checked={visible.includes(c.key)}
+                  disabled={c.always}
+                  onChange={() => toggle(c.key)}
+                  className="h-3.5 w-3.5 rounded border-stone-300 text-amber-700 focus:ring-amber-600"
+                />
+                {c.label}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---- rows ----------------------------------------------------------------
+function Row({ index, style, brews, selectedId, onSelect, columns, gridTemplate, isDesktop }) {
   const b = brews[index]
   const selected = b.id === selectedId
   if (isDesktop) {
-    const pour = (i) => (b.pours && b.pours[i] && b.pours[i].water != null ? b.pours[i].water : '—')
     return (
       <div style={style}>
         <div
           onClick={() => onSelect(b.id)}
           className={`grid h-11 cursor-pointer items-center gap-2 border-b border-stone-100 px-3 text-sm hover:bg-amber-50/60 ${selected ? 'bg-amber-50' : ''}`}
-          style={{ gridTemplateColumns: compact ? COLS_COMPACT : COLS_FULL }}
+          style={{ gridTemplateColumns: gridTemplate }}
         >
-          <div className="min-w-0 truncate"><InstrumentBadge brew={b} /></div>
-          <div className="text-right tabular-nums">{b.coffee != null ? `${b.coffee} g` : '—'}</div>
-          {!compact && <div className="text-right tabular-nums">{b.ratio != null ? `1:${b.ratio}` : '—'}</div>}
-          {!compact && <div className="text-right tabular-nums">{b.withIce && b.ice != null ? `${b.ice} g` : '—'}</div>}
-          {!compact && <div className="text-right tabular-nums">{b.bloomWater != null ? `${b.bloomWater} g` : '—'}</div>}
-          {!compact && <div className="text-right tabular-nums">{pour(0)}</div>}
-          {!compact && <div className="text-right tabular-nums">{pour(1)}</div>}
-          {!compact && <div className="text-right tabular-nums">{pour(2)}</div>}
-          <div className="text-right tabular-nums">{b.rating != null ? `${b.rating}/10` : '—'}</div>
+          {columns.map((c) =>
+            c.key === 'name' ? (
+              <div key="name" className="min-w-0">
+                <div className="truncate font-medium text-stone-800">{fmtDateTime(b)}</div>
+                <div className="truncate"><InstrumentBadge brew={b} /></div>
+              </div>
+            ) : (
+              <div key={c.key} className={`tabular-nums ${c.align === 'right' ? 'text-right' : ''} truncate`}>{cellValue(c.key, b)}</div>
+            )
+          )}
         </div>
       </div>
     )
   }
-  // Mobile card
   return (
     <div style={style} className="px-0.5 pb-3">
       <button
@@ -109,9 +230,10 @@ function Row({ index, style, brews, selectedId, onSelect, compact, isDesktop }) 
         className={`block h-full w-full rounded-xl border bg-white p-4 text-left shadow-sm hover:border-amber-400 ${selected ? 'border-amber-400' : 'border-stone-200'}`}
       >
         <div className="flex items-start justify-between gap-3">
-          <InstrumentBadge brew={b} />
+          <span className="font-medium text-stone-900">{fmtDateTime(b)}</span>
           {b.rating != null && <span className="shrink-0 rounded-lg bg-amber-50 px-2 py-0.5 text-sm font-semibold text-amber-800">{b.rating}/10</span>}
         </div>
+        <div className="mt-1"><InstrumentBadge brew={b} /></div>
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-stone-500">
           <span>{b.coffee != null ? `${b.coffee} g` : '—'} dose</span>
           {b.ratio != null && <span>· 1:{b.ratio}</span>}
@@ -123,33 +245,14 @@ function Row({ index, style, brews, selectedId, onSelect, compact, isDesktop }) 
   )
 }
 
-// Convert a brew (rowToBrew shape) back to the update payload shape, so the full
-// row is preserved on update (brewToRow sets every column).
 function brewToPayload(b) {
   return {
-    id: b.id,
-    instrument: b.instrument,
-    method: b.methodId,
-    withIce: b.withIce,
-    brewName: b.name,
-    coffee: b.coffee,
-    ratio: b.ratio,
-    totalWater: b.totalWater,
-    bloomWater: b.bloomWater,
-    brewWater: b.brewWater,
-    ice: b.ice,
-    iceFactor: b.iceFactor,
-    milk: b.milk,
-    milkRatio: b.milkRatio,
-    dilutionRatio: b.dilutionRatio,
-    dilutionWater: b.dilutionWater,
-    bloomTimeStr: b.bloomTime,
-    drawdownTime: b.drawdownTime,
-    grindSize: b.grindSize,
-    waterTemp: b.waterTemp,
-    rating: b.rating,
-    notes: b.notes,
-    pours: b.pours,
+    id: b.id, instrument: b.instrument, method: b.methodId, withIce: b.withIce,
+    brewName: b.name, coffee: b.coffee, ratio: b.ratio, totalWater: b.totalWater,
+    bloomWater: b.bloomWater, brewWater: b.brewWater, ice: b.ice, iceFactor: b.iceFactor,
+    milk: b.milk, milkRatio: b.milkRatio, dilutionRatio: b.dilutionRatio, dilutionWater: b.dilutionWater,
+    bloomTimeStr: b.bloomTime, drawdownTime: b.drawdownTime, grindSize: b.grindSize,
+    waterTemp: b.waterTemp, rating: b.rating, notes: b.notes, pours: b.pours,
   }
 }
 
@@ -165,63 +268,40 @@ function Stat({ label, value }) {
 function Detail({ brew, onClose, onRebrew, onSaved }) {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({})
-  const [state, setState] = useState('idle') // idle | saving | deleting | error
+  const [state, setState] = useState('idle')
   const [error, setError] = useState('')
+  const isV60 = brew.instrument === 'v60'
+  const pours = Array.isArray(brew.pours) ? brew.pours : []
 
-  // editable metadata only — water amounts + pours are locked (Re-brew recomputes).
   const startEdit = () => {
     setForm({
-      name: brew.name || '',
-      rating: brew.rating == null ? '' : String(brew.rating),
-      notes: brew.notes || '',
-      grindSize: brew.grindSize || '',
-      waterTemp: brew.waterTemp || '',
-      bloomTime: brew.bloomTime || '',
+      name: brew.name || '', rating: brew.rating == null ? '' : String(brew.rating), notes: brew.notes || '',
+      grindSize: brew.grindSize || '', waterTemp: brew.waterTemp || '', bloomTime: brew.bloomTime || '',
     })
-    setError('')
-    setState('idle')
-    setEditing(true)
+    setError(''); setState('idle'); setEditing(true)
   }
 
   const save = async () => {
-    setState('saving')
-    setError('')
+    setState('saving'); setError('')
     try {
-      const payload = {
+      await updateBrew({
         ...brewToPayload(brew),
         brewName: form.name,
         rating: form.rating === '' ? null : Number(form.rating),
         notes: form.notes,
-        grindSize: brew.instrument === 'v60' ? form.grindSize : brew.grindSize,
+        grindSize: isV60 ? form.grindSize : brew.grindSize,
         waterTemp: form.waterTemp,
-        bloomTimeStr: brew.instrument === 'v60' ? form.bloomTime : brew.bloomTime,
-      }
-      await updateBrew(payload)
-      setEditing(false)
-      setState('idle')
-      onSaved()
-    } catch (e) {
-      setError(e.message)
-      setState('error')
-    }
+        bloomTimeStr: isV60 ? form.bloomTime : brew.bloomTime,
+      })
+      setEditing(false); setState('idle'); onSaved()
+    } catch (e) { setError(e.message); setState('error') }
   }
 
   const remove = async () => {
     if (!window.confirm('Delete this brew permanently? This cannot be undone.')) return
-    setState('deleting')
-    setError('')
-    try {
-      await deleteBrew(brew.id)
-      onClose()
-      onSaved()
-    } catch (e) {
-      setError(e.message)
-      setState('error')
-    }
+    setState('deleting'); setError('')
+    try { await deleteBrew(brew.id); onClose(); onSaved() } catch (e) { setError(e.message); setState('error') }
   }
-
-  const isV60 = brew.instrument === 'v60'
-  const pours = Array.isArray(brew.pours) ? brew.pours : []
 
   return (
     <div>
@@ -250,7 +330,6 @@ function Detail({ brew, onClose, onRebrew, onSaved }) {
         </div>
       </div>
 
-      {/* Heading = date & time + instrument (PRD §4.3) */}
       <div className="mb-3">
         <h3 className="text-base font-semibold text-stone-900">{fmtDateTime(brew)}</h3>
         <div className="mt-1"><InstrumentBadge brew={brew} /></div>
@@ -273,7 +352,6 @@ function Detail({ brew, onClose, onRebrew, onSaved }) {
             {brew.waterTemp && <Stat label="Water temp" value={brew.waterTemp} />}
           </div>
 
-          {/* Pour schedule (calculator-like) */}
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-stone-200 text-left text-stone-500">
@@ -350,22 +428,13 @@ function Detail({ brew, onClose, onRebrew, onSaved }) {
 }
 
 function PageSizeSelector({ pageSize, onChange }) {
-  // `custom` is its own mode so selecting "Custom" reveals the input even when the
-  // current size happens to equal a preset (avoids a chicken-and-egg).
   const [custom, setCustom] = useState(!PRESET_SIZES.includes(pageSize))
   return (
     <div className="flex items-center gap-1 text-xs text-stone-500">
       <span>Page size</span>
       <select
         value={custom ? 'custom' : String(pageSize)}
-        onChange={(e) => {
-          if (e.target.value === 'custom') {
-            setCustom(true)
-          } else {
-            setCustom(false)
-            onChange(Number(e.target.value))
-          }
-        }}
+        onChange={(e) => { if (e.target.value === 'custom') setCustom(true); else { setCustom(false); onChange(Number(e.target.value)) } }}
         className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-stone-700 outline-none focus:border-amber-600"
       >
         {PRESET_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
@@ -373,14 +442,8 @@ function PageSizeSelector({ pageSize, onChange }) {
       </select>
       {custom && (
         <input
-          type="number"
-          min="1"
-          max="100"
-          value={pageSize}
-          onChange={(e) => {
-            const n = parseInt(e.target.value, 10)
-            if (Number.isFinite(n) && n >= 1 && n <= 100) onChange(n)
-          }}
+          type="number" min="1" max="100" value={pageSize}
+          onChange={(e) => { const n = parseInt(e.target.value, 10); if (Number.isFinite(n) && n >= 1 && n <= 100) onChange(n) }}
           onWheel={(e) => e.currentTarget.blur()}
           className="w-16 rounded-lg border border-stone-300 px-2 py-1 text-stone-700 outline-none focus:border-amber-600"
         />
@@ -391,58 +454,63 @@ function PageSizeSelector({ pageSize, onChange }) {
 
 export default function Logbook({ onRebrew }) {
   const isDesktop = useIsDesktop()
-  const [status, setStatus] = useState('loading') // loading | loaded | error
+  const { user } = useAuth()
+  const [status, setStatus] = useState('loading')
   const [brews, setBrews] = useState([])
   const [total, setTotal] = useState(null)
   const [error, setError] = useState('')
   const [selectedId, setSelectedId] = useState(null)
   const [pageSize, setPageSize] = useState(loadPageSize)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [visibleCols, setVisibleCols] = useState(loadColumns)
+  const [filters, setFilters] = useState(() => ({ ...DEFAULT_FILTERS, ...(user?.user_metadata?.logbook_filters || {}) }))
+  const filtersKey = JSON.stringify(filters)
 
-  const load = useCallback(async (size) => {
-    setStatus('loading')
-    setError('')
-    setSelectedId(null)
+  // Persist columns (localStorage).
+  useEffect(() => { localStorage.setItem(COLUMNS_KEY, JSON.stringify(visibleCols)) }, [visibleCols])
+
+  // Persist filters server-side per account (Supabase auth user_metadata), debounced.
+  const firstFilterRun = useRef(true)
+  useEffect(() => {
+    if (firstFilterRun.current) { firstFilterRun.current = false; return }
+    const t = setTimeout(() => {
+      supabase.auth.updateUser({ data: { logbook_filters: filters } }).catch(() => { /* non-fatal */ })
+    }, 800)
+    return () => clearTimeout(t)
+  }, [filtersKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const load = useCallback(async (size, f) => {
+    setStatus('loading'); setError(''); setSelectedId(null)
     try {
-      const { brews: page, total: count } = await listBrews({ limit: size, offset: 0 })
-      setBrews(page)
-      setTotal(count)
-      setStatus('loaded')
-    } catch (e) {
-      setError(e.message)
-      setStatus('error')
-    }
+      const { brews: page, total: count } = await listBrews({ limit: size, offset: 0, filters: f })
+      setBrews(page); setTotal(count); setStatus('loaded')
+    } catch (e) { setError(e.message); setStatus('error') }
   }, [])
 
-  useEffect(() => {
-    load(pageSize)
-  }, [load, pageSize])
+  useEffect(() => { load(pageSize, filters) }, [load, pageSize, filtersKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const changePageSize = (n) => {
-    localStorage.setItem(PAGE_SIZE_KEY, String(n))
-    setPageSize(n)
-  }
+  const changePageSize = (n) => { localStorage.setItem(PAGE_SIZE_KEY, String(n)); setPageSize(n) }
 
   const loadMore = async () => {
     setLoadingMore(true)
     try {
-      const { brews: page, total: count } = await listBrews({ limit: pageSize, offset: brews.length })
-      setBrews((prev) => [...prev, ...page])
-      setTotal(count)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoadingMore(false)
-    }
+      const { brews: page, total: count } = await listBrews({ limit: pageSize, offset: brews.length, filters })
+      setBrews((prev) => [...prev, ...page]); setTotal(count)
+    } catch (e) { setError(e.message) } finally { setLoadingMore(false) }
   }
 
   const selected = brews.find((b) => b.id === selectedId) || null
   const hasMore = total != null && brews.length < total
-  const refresh = () => load(pageSize)
+  const refresh = () => load(pageSize, filters)
+
+  // Effective columns: compact set when a detail is open beside the table.
+  const effectiveKeys = isDesktop && selected ? COMPACT_VISIBLE : visibleCols
+  const columns = ALL_COLUMNS.filter((c) => effectiveKeys.includes(c.key))
+  const gridTemplate = columns.map((c) => c.width).join(' ')
 
   const listHeight = isDesktop ? 460 : Math.round((typeof window !== 'undefined' ? window.innerHeight : 700) * 0.6)
-  const rowHeight = isDesktop ? 44 : 96
-  const rowProps = { brews, selectedId, onSelect: setSelectedId, compact: isDesktop && !!selected, isDesktop }
+  const rowHeight = isDesktop ? 44 : 116
+  const rowProps = { brews, selectedId, onSelect: setSelectedId, columns, gridTemplate, isDesktop }
 
   return (
     <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
@@ -450,40 +518,47 @@ export default function Logbook({ onRebrew }) {
         <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">Logbook</h2>
         <div className="flex items-center gap-3">
           <PageSizeSelector pageSize={pageSize} onChange={changePageSize} />
+          {isDesktop && <ColumnsMenu visible={visibleCols} setVisible={setVisibleCols} />}
           <button onClick={refresh} disabled={status === 'loading'} className="rounded-lg border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:border-amber-600 hover:text-amber-800 disabled:opacity-50">
             {status === 'loading' ? 'Loading…' : 'Refresh'}
           </button>
         </div>
       </div>
 
-      {status === 'loading' && <p className="text-sm text-stone-500">Loading your brews…</p>}
-
-      {status === 'error' && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          <p className="font-medium">Couldn’t load the logbook.</p>
-          <p className="mt-1">{error}</p>
-        </div>
-      )}
-
-      {status === 'loaded' && brews.length === 0 && (
-        <p className="text-sm text-stone-500">No brews logged yet. Calculate a recipe and tap “Save to Logbook”.</p>
-      )}
-
-      {status === 'loaded' && brews.length > 0 && (
+      {/* Mobile full-page detail replaces everything; otherwise show filters + list. */}
+      {!isDesktop && selected ? (
+        <Detail brew={selected} onClose={() => setSelectedId(null)} onRebrew={onRebrew} onSaved={refresh} />
+      ) : (
         <>
-          {/* Mobile: full-page detail replaces the list when a brew is selected. */}
-          {!isDesktop && selected ? (
-            <Detail brew={selected} onClose={() => setSelectedId(null)} onRebrew={onRebrew} onSaved={refresh} />
-          ) : (
+          <Filters filters={filters} setFilters={setFilters} />
+
+          {status === 'loading' && <p className="text-sm text-stone-500">Loading your brews…</p>}
+
+          {status === 'error' && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              <p className="font-medium">Couldn’t load the logbook.</p>
+              <p className="mt-1">{error}</p>
+            </div>
+          )}
+
+          {status === 'loaded' && brews.length === 0 && (
+            <p className="text-sm text-stone-500">No brews match these filters.</p>
+          )}
+
+          {status === 'loaded' && brews.length > 0 && (
             <div className="md:flex md:items-start md:gap-4">
               <div className="md:min-w-0 md:flex-1">
-                {isDesktop && (
+                {isDesktop ? (
                   <div className="overflow-hidden rounded-lg border border-stone-200">
-                    <TableHeader compact={!!selected} />
+                    <div
+                      className="grid gap-2 border-b border-stone-200 px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-stone-500"
+                      style={{ gridTemplateColumns: gridTemplate }}
+                    >
+                      {columns.map((c) => <div key={c.key} className={c.align === 'right' ? 'text-right' : ''}>{c.label}</div>)}
+                    </div>
                     <List rowComponent={Row} rowCount={brews.length} rowHeight={rowHeight} rowProps={rowProps} style={{ height: listHeight }} />
                   </div>
-                )}
-                {!isDesktop && (
+                ) : (
                   <List rowComponent={Row} rowCount={brews.length} rowHeight={rowHeight} rowProps={rowProps} style={{ height: listHeight }} />
                 )}
 
@@ -497,9 +572,8 @@ export default function Logbook({ onRebrew }) {
                 </div>
               </div>
 
-              {/* Desktop: right split detail panel. */}
               {isDesktop && selected && (
-                <div className="mt-4 md:mt-0 md:w-96 md:shrink-0 md:border-l md:border-stone-200 md:pl-4">
+                <div className="md:w-96 md:shrink-0 md:border-l md:border-stone-200 md:pl-4">
                   <Detail brew={selected} onClose={() => setSelectedId(null)} onRebrew={onRebrew} onSaved={refresh} />
                 </div>
               )}

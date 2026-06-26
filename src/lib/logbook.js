@@ -141,15 +141,39 @@ export async function saveBrew(payload) {
   return rowToBrew(data)
 }
 
+/** Apply the recipe-book chip filters to a Supabase query builder (server-side). */
+function applyFilters(q, f = {}) {
+  if (f.instrument && f.instrument !== 'all') q = q.eq('instrument', f.instrument)
+  if (f.ice === 'with') q = q.eq('with_ice', true)
+  else if (f.ice === 'without') q = q.eq('with_ice', false)
+  // Unrated counts as 0, so 0+ = all; min>0 uses gte (null ratings are excluded).
+  if (f.ratingMin && f.ratingMin > 0) q = q.gte('rating', f.ratingMin)
+  const d = f.date
+  if (d && d.mode && d.mode !== 'all') {
+    const now = Date.now()
+    const DAY = 86400000
+    if (d.mode === 'today') {
+      const s = new Date(); s.setHours(0, 0, 0, 0)
+      q = q.gte('created_at', s.toISOString())
+    } else if (d.mode === '7d') {
+      q = q.gte('created_at', new Date(now - 7 * DAY).toISOString())
+    } else if (d.mode === '30d') {
+      q = q.gte('created_at', new Date(now - 30 * DAY).toISOString())
+    } else if (d.mode === 'custom') {
+      if (d.from) q = q.gte('created_at', new Date(`${d.from}T00:00:00`).toISOString())
+      if (d.to) q = q.lte('created_at', new Date(`${d.to}T23:59:59.999`).toISOString())
+    }
+  }
+  return q
+}
+
 /** List a page of the signed-in user's brews, newest first (Supabase range
- *  pagination). Resolves with { brews, total } or throws. */
-export async function listBrews({ limit = 25, offset = 0 } = {}) {
+ *  pagination + optional chip filters). Resolves with { brews, total } or throws. */
+export async function listBrews({ limit = 25, offset = 0, filters = {} } = {}) {
   if (!isSupabaseConfigured) throw new Error(NOT_CONFIGURED)
-  const { data, error, count } = await supabase
-    .from('brews')
-    .select('*', { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1)
+  let q = supabase.from('brews').select('*', { count: 'exact' }).order('created_at', { ascending: false })
+  q = applyFilters(q, filters)
+  const { data, error, count } = await q.range(offset, offset + limit - 1)
   if (error) throw new Error(error.message)
   return { brews: (data || []).map(rowToBrew), total: count ?? null }
 }
