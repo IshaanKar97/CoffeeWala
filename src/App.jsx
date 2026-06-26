@@ -219,13 +219,14 @@ export default function App() {
   const buildPayload = () => {
     const nowDate = new Date()
     const today = nowDate.toISOString().slice(0, 10)
-    const hhmm = nowDate.toTimeString().slice(0, 5)
-    const instLabel = instrument === 'v60' ? 'V60' : 'Filter Coffee'
-    const iceTag = instrument === 'v60' && iceOn ? ' · Ice' : ''
+    // Recipe name = current date & time (PRD §4.2 R-2.2.e), e.g. "Jun 26, 2026, 2:30 PM".
+    const brewName = nowDate.toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    })
     // Filter has no bloom; its single pour is result.steps[0]. V60 pours follow the bloom.
     const pourSteps = instrument === 'filter' ? result.steps : result.steps.slice(1)
     const payload = {
-      brewName: `${instLabel} ${METHOD_LABEL[method]}${iceTag} · ${num(dose)}g · ${today} ${hhmm}`,
+      brewName,
       instrument,
       method,
       withIce: instrument === 'v60' ? iceOn : false,
