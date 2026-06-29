@@ -10,3 +10,8 @@ dist-ssr
 
 # Local Netlify folder
 .netlify
+
+# Secrets — never commit (OAuth client secrets, service keys, etc.)
+OAuth_Secret.json
+*secret*.json
+*credentials*.json
